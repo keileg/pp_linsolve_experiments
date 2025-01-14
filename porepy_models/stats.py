@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from dataclasses import asdict
 import time 
+import scipy.sparse as sps
 
 import numpy as np
 
@@ -101,3 +102,27 @@ class SolverStatistics:
         DAY = 24 * 60 * 60
         print(f"Sim time: {self.time_manager.time / DAY}, Dt: {self.time_manager.dt / DAY :.2f} (days)")
 
+    def save_matrix_state(self):
+        save_path = Path("./matrices")
+        save_path.mkdir(exist_ok=True)
+        mat, rhs = self.linear_system
+        name = f"{self.simulation_name()}_{int(time.time() * 1000)}"
+        print('Saving matrix', name)
+        mat_id = f"{name}.npz"
+        rhs_id = f"{name}_rhs.npy"
+        state_id = f"{name}_state.npy"
+        iterate_id = f"{name}_iterate.npy"
+        sps.save_npz(save_path / mat_id, self.bmat.mat)
+        np.save(save_path / rhs_id, rhs)
+        np.save(
+            save_path / state_id,
+            self.equation_system.get_variable_values(time_step_index=0),
+        )
+        np.save(
+            save_path / iterate_id,
+            self.equation_system.get_variable_values(iterate_index=0),
+        )
+        self._linear_solve_stats.iterate_id = iterate_id
+        self._linear_solve_stats.state_id = state_id
+        self._linear_solve_stats.matrix_id = mat_id
+        self._linear_solve_stats.rhs_id = rhs_id
