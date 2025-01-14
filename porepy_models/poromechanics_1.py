@@ -16,8 +16,7 @@ and has been developed by Yuriy Zabegaev.
 import numpy as np
 import porepy as pp
 from porepy.numerics.nonlinear import line_search
-from statistics import SolverStatistics
-
+from stats import SolverStatistics
 
 XMAX = 1000
 YMAX = 1000
@@ -124,6 +123,7 @@ class PoromechanicsModel(
     Geometry,
     BoundaryConditions,
     InitialCondition, 
+    Solver,
     SolverStatistics,
     pp.models.solution_strategy.ContactIndicators,
     pp.Poromechanics, 
