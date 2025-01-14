@@ -17,6 +17,7 @@ import numpy as np
 import porepy as pp
 from porepy.numerics.nonlinear import line_search
 from stats import SolverStatistics
+from FTHM_Solver.hm_solver import IterativeHMSolver as Solver
 
 XMAX = 1000
 YMAX = 1000
@@ -117,6 +118,11 @@ class ConstraintLineSearchNonlinearSolver(
     line_search.LineSearchNewtonSolver,  # General line search.
 ):
     """Collect all the line search methods in one class."""
+
+class SolutionStrategyPM:
+
+    def simulation_name(self) -> str:
+        return "poromechanics_1"
 
 
 class PoromechanicsModel(
