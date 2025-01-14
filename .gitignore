@@ -1,0 +1,6 @@
+*.msh
+*.geo_unrolled
+*.pvd
+*.vtu
+*.json
+*.swp
