@@ -99,5 +99,5 @@ fi
 # Install petsc4py
 python -m pip install src/binding/petsc4py
 
-# Install mpi4py
-python -m pip install mpi4py
+# Install mpi4py. The hard-coding of the version number is bad here
+python -m pip install packages/externalpackages/mpi4py-4.0.1
