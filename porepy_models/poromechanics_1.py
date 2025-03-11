@@ -1,5 +1,5 @@
 """This defines a 3d poromechanics model with 4 fractures. The setup is (slightly)
-modified from the experiment reported in 
+modified from the experiment reported in
 
     An efficient preconditioner for mixed-dimensional contact poromechanics based on the
     fixed stress splitting scheme, by Zabegaev, et al., arXiv:2501.07441.
@@ -13,6 +13,7 @@ and has been developed by Yuriy Zabegaev.
 
 
 """
+
 import numpy as np
 import porepy as pp
 from porepy.numerics.nonlinear import line_search
@@ -25,7 +26,6 @@ ZMAX = 1000
 
 
 class Geometry:
-
     def set_domain(self) -> None:
         self._domain = pp.Domain(
             {"xmin": 0, "xmax": 1000, "ymin": 0, "ymax": 1000, "zmin": 0, "zmax": 1000}
@@ -50,7 +50,6 @@ class Geometry:
 
 
 class BoundaryConditions:
-
     def bc_type_fluid_flux(self, sd: pp.Grid) -> pp.BoundaryCondition:
         # Dirichlet condition for the pressure on all sides
         sides = self.domain_boundary_sides(sd)
@@ -73,13 +72,12 @@ class BoundaryConditions:
         return bc
 
     def bc_values_stress(self, boundary_grid: pp.BoundaryGrid) -> np.ndarray:
-
         sides = self.domain_boundary_sides(boundary_grid)
         bc_values = np.zeros((self.nd, boundary_grid.num_cells))
-        
+
         val = self.units.convert_units(3e6, units="Pa")
-        
-        # South side has Dirichlet condition. Tensional force on the north side (?), 
+
+        # South side has Dirichlet condition. Tensional force on the north side (?),
         # compressive force on the remaining sides.
         bc_values[0, sides.north] = 0.1 * val * boundary_grid.cell_volumes[sides.north]
         bc_values[2, sides.bottom] = val * boundary_grid.cell_volumes[sides.bottom]
@@ -87,10 +85,10 @@ class BoundaryConditions:
         bc_values[2, sides.top] = -val * boundary_grid.cell_volumes[sides.top]
         bc_values[0, sides.east] = -val * boundary_grid.cell_volumes[sides.east]
 
-        return bc_values.ravel("F")    
+        return bc_values.ravel("F")
+
 
 class InitialCondition:
-
     def initial_condition(self) -> None:
         # Set initial condition for pressure, default values for other variables.
         super().initial_condition()
@@ -109,8 +107,8 @@ class InitialCondition:
                 val,
                 variables=[self.pressure_variable],
                 iterate_index=iterate_index,
-            )    
- 
+            )
+
 
 class ConstraintLineSearchNonlinearSolver(
     line_search.ConstraintLineSearch,  # The tailoring to contact constraints.
@@ -119,8 +117,8 @@ class ConstraintLineSearchNonlinearSolver(
 ):
     """Collect all the line search methods in one class."""
 
-class SolutionStrategyPM:
 
+class SolutionStrategyPM:
     def simulation_name(self) -> str:
         return "poromechanics_1"
 
@@ -128,17 +126,16 @@ class SolutionStrategyPM:
 class PoromechanicsModel(
     Geometry,
     BoundaryConditions,
-    InitialCondition, 
+    InitialCondition,
     Solver,
     SolverStatistics,
     pp.models.solution_strategy.ContactIndicators,
-    pp.Poromechanics, 
-    ):
+    pp.Poromechanics,
+):
     pass
 
 
 def make_model(setup: dict):
-
     cell_size_multiplier = setup["grid_refinement"]
 
     WEEK = 24 * 60 * 60 * 7
@@ -164,8 +161,8 @@ def make_model(setup: dict):
                 density=2683.0,  # [kg * m^-3]
                 porosity=porosity,  # [-]
                 specific_storage=specific_storage,  # [Pa^-1]
-                #**get_barton_bandis_config(setup),
-                #**get_friction_coef_config(setup),
+                # **get_barton_bandis_config(setup),
+                # **get_friction_coef_config(setup),
             ),
             "fluid": pp.FluidComponent(
                 compressibility=4.559 * 1e-10,  # [Pa^-1], fluid compressibility
@@ -202,6 +199,10 @@ def run_model(setup: dict):
     # print(model.simulation_name())
     # pp.plot_grid(model.mdg, plot_2d=True, fracturewidth_1d=5)
 
+    print("Model grid:")
+    print(model.mdg)
+    print("\n")
+
     pp.run_time_dependent_model(
         model,
         {
@@ -218,14 +219,13 @@ def run_model(setup: dict):
         },
     )
 
-    #print(model.simulation_name())
+    # print(model.simulation_name())
 
 
-
-#if __name__ == "__main__":
+# if __name__ == "__main__":
 if True:
     solver = 21
-    for g in [0.25, 0.5]:
+    for g in [0.25]:
         run_model(
             {
                 "physics": 1,
