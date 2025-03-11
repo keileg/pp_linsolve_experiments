@@ -48,15 +48,6 @@ class BoundaryConditions:
         bc = pp.BoundaryCondition(sd, sides.all_bf, "dir")
         return bc
 
-    def bc_values_pressure(self, boundary_grid):
-        # Default values everywhere but the east side, where the pressure is elevated
-        # by a factor of 20.
-        vals = super().bc_values_pressure(boundary_grid)
-        sides = self.domain_boundary_sides(boundary_grid)
-        val = 20
-        vals[sides.east] *= val
-        return vals
-
     def bc_type_mechanics(self, sd: pp.Grid) -> pp.BoundaryConditionVectorial:
         sides = self.domain_boundary_sides(sd)
         bc = pp.BoundaryConditionVectorial(sd, sides.south, "dir")
@@ -66,16 +57,13 @@ class BoundaryConditions:
     def bc_values_stress(self, boundary_grid: pp.BoundaryGrid) -> np.ndarray:
         sides = self.domain_boundary_sides(boundary_grid)
         bc_values = np.zeros((self.nd, boundary_grid.num_cells))
-
-        val = self.units.convert_units(3e6, units="Pa")
-
-        # South side has Dirichlet condition. Tensional force on the north side (?),
-        # compressive force on the remaining sides.
-        bc_values[0, sides.north] = 0.1 * val * boundary_grid.cell_volumes[sides.north]
-        bc_values[2, sides.bottom] = val * boundary_grid.cell_volumes[sides.bottom]
-        bc_values[0, sides.west] = val * boundary_grid.cell_volumes[sides.west]
-        bc_values[2, sides.top] = -val * boundary_grid.cell_volumes[sides.top]
-        bc_values[0, sides.east] = -val * boundary_grid.cell_volumes[sides.east]
+        # rho * g * h
+        # 2683 * 10 * 3000
+        val = self.units.convert_units(8e7, units="Pa")
+        bc_values[1, sides.north] = -val * boundary_grid.cell_volumes[sides.north]
+        #  make the gradient
+        bc_values[0, sides.west] = val * boundary_grid.cell_volumes[sides.west] * 1.2
+        bc_values[0, sides.east] = -val * boundary_grid.cell_volumes[sides.east] * 1.2
 
         return bc_values.ravel("F")
 
@@ -143,6 +131,16 @@ class Source:
         return super().energy_source(subdomains) + pp.ad.DenseArray(src)
 
 
+class SolutionStrategyLocalTHM:
+    def after_simulation(self):
+        super().after_simulation()
+        vals = self.equation_system.get_variable_values(time_step_index=0)
+        name = f"thm_endstate_{int(time.time() * 1000)}.npy"
+        print("Saving", name)
+        self.params["setup"]["end_state_filename"] = name
+        np.save(name, vals)
+
+
 class ConstraintLineSearchNonlinearSolver(
     line_search.ConstraintLineSearch,  # The tailoring to contact constraints.
     line_search.SplineInterpolationLineSearch,  # Technical implementation of the actual search along given update direction
@@ -158,6 +156,7 @@ class THMModel(
     BoundaryConditions,
     THMSolver,
     SolverStatistics,
+    SolutionStrategyLocalTHM,
     pp.models.solution_strategy.ContactIndicators,
     pp.Thermoporomechanics,
 ):
@@ -243,7 +242,10 @@ def make_model(setup: dict):
 def run_model(setup: dict):
     model = make_model(setup)
     model.prepare_simulation()
-    print(model.simulation_name())
+    # print(model.simulation_name())
+
+    print("Model geometry:")
+    print(model.mdg)
 
     pp.run_time_dependent_model(
         model,
@@ -251,7 +253,7 @@ def run_model(setup: dict):
             "prepare_simulation": False,
             "progressbars": False,
             "nl_convergence_tol": float("inf"),
-            "nl_convergence_tol_res": 1e-7,
+            "nl_convergence_tol_res": 1e-10,
             "nl_divergence_tol": 1e8,
             "max_iterations": 30,
             # experimental
@@ -262,7 +264,7 @@ def run_model(setup: dict):
     )
 
     # write_dofs_info(model)
-    print(model.simulation_name())
+    # print(model.simulation_name())
 
 
 if __name__ == "__main__":
