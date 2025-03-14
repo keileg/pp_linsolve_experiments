@@ -9,9 +9,13 @@ import porepy as pp
 import numpy as np
 import time
 from porepy.numerics.nonlinear import line_search
+from typing import Optional
 
 from stats import SolverStatistics
 from FTHM_Solver.thm_solver import THMSolver
+
+from porepy.applications.md_grids.fracture_sets import benchmark_2d_case_3
+
 
 XMAX = 1000
 YMAX = 1000
@@ -20,40 +24,20 @@ YMAX = 1000
 class Geometry:
     def set_domain(self) -> None:
         self._domain = pp.Domain(
-            {"xmin": 0, "xmax": 1000, "ymin": 0, "ymax": 1000, "zmin": 0, "zmax": 1000}
+            {
+                "xmin": -0.1 * XMAX,
+                "xmax": 1.1 * XMAX,
+                "ymin": -0.1 * YMAX,
+                "ymax": 1.1 * YMAX,
+            }
         )
 
     def set_fractures(self) -> None:
-        # Set four fractures in the domain.
-        pts_list = np.array(
-            [
-                [[0.1, 0.1, 0.9, 0.9], [0.5, 0.5, 0.5, 0.5], [0.2, 0.8, 0.8, 0.2]],
-                [[0.15, 0.15, 0.4, 0.4], [0.7, 0.7, 0.2, 0.2], [0.2, 0.8, 0.8, 0.2]],
-                [[0.45, 0.45, 0.6, 0.6], [0.3, 0.3, 0.8, 0.8], [0.2, 0.8, 0.8, 0.2]],
-                [[0.6, 0.6, 0.8, 0.8], [0.2, 0.2, 0.8, 0.8], [0.2, 0.8, 0.8, 0.2]],
-            ]
-        )
-        box = self._domain.bounding_box
-        pts_list[:, 0] *= box["xmax"]
-        pts_list[:, 1] *= box["ymax"]
-        pts_list[:, 2] *= box["zmax"]
-
-        self._fractures = [pp.PlaneFracture(pts) for pts in pts_list]
+        # self._fractures = []
+        self._fractures = benchmark_2d_case_3(size=XMAX)
 
 
 class BoundaryConditions:
-    def bc_type_fluid_flux(self, sd: pp.Grid) -> pp.BoundaryCondition:
-        # Dirichlet condition for the pressure on all sides
-        sides = self.domain_boundary_sides(sd)
-        bc = pp.BoundaryCondition(sd, sides.all_bf, "dir")
-        return bc
-
-    def bc_type_mechanics(self, sd: pp.Grid) -> pp.BoundaryConditionVectorial:
-        sides = self.domain_boundary_sides(sd)
-        bc = pp.BoundaryConditionVectorial(sd, sides.south, "dir")
-        bc.internal_to_dirichlet(sd)
-        return bc
-
     def bc_values_stress(self, boundary_grid: pp.BoundaryGrid) -> np.ndarray:
         sides = self.domain_boundary_sides(boundary_grid)
         bc_values = np.zeros((self.nd, boundary_grid.num_cells))
@@ -72,36 +56,53 @@ class InitialCondition:
     def initial_condition(self) -> None:
         # Set initial condition for pressure, default values for other variables.
         super().initial_condition()
-        num_cells = sum([sd.num_cells for sd in self.mdg.subdomains()])
-        val = self.reference_variable_values.pressure * np.ones(num_cells)
 
-        for time_step_index in self.time_step_indices:
-            self.equation_system.set_variable_values(
-                val,
-                variables=[self.pressure_variable],
-                time_step_index=time_step_index,
-            )
+    def ic_values_temperature(self, sd: pp.Grid) -> np.ndarray:
+        """Method returning the initial temperature values for a given grid.
 
-        for iterate_index in self.iterate_indices:
-            self.equation_system.set_variable_values(
-                val,
-                variables=[self.pressure_variable],
-                iterate_index=iterate_index,
-            )
+        Override this method to provide different initial conditions.
+
+        Parameters:
+            sd: A subdomain in the md-grid.
+
+        Returns:
+            The initial temperature values on that subdomain with
+            ``shape=(sd.num_cells,)``. Defaults to zero array.
+
+        """
+        return np.ones(sd.num_cells) * self.reference_variable_values.temperature
+
+    def ic_values_pressure(self, sd: pp.Grid) -> np.ndarray:
+        """Method returning the initial pressure values for a given grid.
+
+        Override this method to provide different initial conditions.
+
+        Parameters:
+            sd: A subdomain in the md-grid.
+
+        Returns:
+            The initial pressure values on that subdomain with
+            ``shape=(sd.num_cells,)``. Defaults to zero array.
+
+        """
+        return np.ones(sd.num_cells) * self.reference_variable_values.pressure
 
 
 class Source:
     def locate_source(self, subdomains):
         source_loc_x = XMAX * 0.9
         source_loc_y = YMAX * 0.5
+
         ambient = [sd for sd in subdomains if sd.dim == self.nd]
         fractures = [sd for sd in subdomains if sd.dim == self.nd - 1]
         lower = [sd for sd in subdomains if sd.dim <= self.nd - 2]
-
-        x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
-        source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
-        src_frac = np.zeros(x.size)
-        src_frac[source_loc] = 1
+        if len(self._fractures) > 0:
+            x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
+            source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
+            src_frac = np.zeros(x.size)
+            src_frac[source_loc] = 1
+        else:
+            src_frac = np.array([])
 
         zeros_ambient = np.zeros(sum(sd.num_cells for sd in ambient))
         zeros_lower = np.zeros(sum(sd.num_cells for sd in lower))
@@ -140,6 +141,63 @@ class SolutionStrategyLocalTHM:
         self.params["setup"]["end_state_filename"] = name
         np.save(name, vals)
 
+    def check_convergence(
+        self,
+        nonlinear_increment: np.ndarray,
+        residual,
+        reference_residual: np.ndarray,
+        nl_params,
+    ):
+        # In addition to the standard check, print the iteration number, increment and
+        # residual.
+        prm = super().check_convergence(
+            nonlinear_increment, residual, reference_residual, nl_params
+        )
+        nl_incr = self.nonlinear_solver_statistics.nonlinear_increment_norms[-1]
+        res_norm = self.nonlinear_solver_statistics.residual_norms[-1]
+        s = f"Non-linear increment: {nl_incr:.2e}, Residual: {res_norm:.2e}"
+        print(s)
+
+        return prm
+
+    def compute_residual_norm(
+        self, residual: Optional[np.ndarray], reference_residual: np.ndarray
+    ) -> float:
+        """Compute the residual norm for a nonlinear iteration.
+
+        Parameters:
+            residual: Residual of current iteration.
+            reference_residual: Reference residual value (initial residual expected),
+                allowing for defining relative criteria.
+
+        Returns:
+            float: Residual norm; np.nan if the residual is None.
+
+        """
+        if residual is None:
+            return np.nan
+        residual_norm = np.linalg.norm(residual) / np.linalg.norm(reference_residual)
+        return residual_norm
+
+    def compute_nonlinear_increment_norm(
+        self, nonlinear_increment: np.ndarray
+    ) -> float:
+        """Compute the norm based on the update increment for a nonlinear iteration.
+
+        Parameters:
+            nonlinear_increment: Solution to the linearization.
+
+        Returns:
+            float: Update increment norm.
+
+        """
+        # Simple but fairly robust convergence criterions. More advanced options are
+        # e.g. considering norms for each variable and/or each grid separately,
+        # possibly using _l2_norm_cell
+        # We normalize by the size of the solution vector.
+        nonlinear_increment_norm = np.linalg.norm(nonlinear_increment)
+        return nonlinear_increment_norm
+
 
 class ConstraintLineSearchNonlinearSolver(
     line_search.ConstraintLineSearch,  # The tailoring to contact constraints.
@@ -154,7 +212,7 @@ class THMModel(
     Source,
     InitialCondition,
     BoundaryConditions,
-    THMSolver,
+    # THMSolver,
     SolverStatistics,
     SolutionStrategyLocalTHM,
     pp.models.solution_strategy.ContactIndicators,
@@ -172,7 +230,7 @@ def make_model(setup: dict):
     lame = 1.2e10
     if setup["steady_state"]:
         biot = 0
-        dt_init = 1e0
+        dt_init = 1e-1
         end_time = 1e1
     else:
         biot = 0.47
@@ -193,7 +251,7 @@ def make_model(setup: dict):
                 # LESS IMPORTANT
                 shear_modulus=shear,  # [Pa]
                 lame_lambda=lame,  # [Pa]
-                dilation_angle=5 * np.pi / 180,  # [rad]
+                dilation_angle=0 * np.pi / 180,  # [rad]
                 normal_permeability=1e-4,
                 # granite
                 biot_coefficient=biot,  # [-]
@@ -234,7 +292,7 @@ def make_model(setup: dict):
             "cell_size": (0.1 * XMAX / cell_size_multiplier),
         },
         # experimental
-        "adaptive_indicator_scaling": 1,  # Scale the indicator adaptively to increase robustness
+        "adaptive_indicator_scaling": True,  # Scale the indicator adaptively to increase robustness
     }
     return THMModel(params)
 
@@ -246,14 +304,13 @@ def run_model(setup: dict):
 
     print("Model geometry:")
     print(model.mdg)
-
     pp.run_time_dependent_model(
         model,
         {
             "prepare_simulation": False,
             "progressbars": False,
             "nl_convergence_tol": float("inf"),
-            "nl_convergence_tol_res": 1e-10,
+            "nl_convergence_tol_res": 1e-8,
             "nl_divergence_tol": 1e8,
             "max_iterations": 30,
             # experimental
@@ -269,11 +326,10 @@ def run_model(setup: dict):
 
 if __name__ == "__main__":
     common_params = {
-        "geometry": "4test",
         "solver": "CPR",
     }
     for g in [
-        1,
+        3,
         # 2,
         # 5,
         # 25,
