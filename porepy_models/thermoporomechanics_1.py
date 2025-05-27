@@ -12,23 +12,23 @@ from porepy.numerics.nonlinear import line_search
 from typing import Optional
 
 from stats import SolverStatistics
-from FTHM_Solver.thm_solver import THMSolver
+import FTHM_Solver
 
 from porepy.applications.md_grids.fracture_sets import benchmark_2d_case_3
 
 
-XMAX = 1000
-YMAX = 1000
+XMAX = 2000
+YMAX = 2000
 
 
 class Geometry:
     def set_domain(self) -> None:
         self._domain = pp.Domain(
             {
-                "xmin": -0.1 * XMAX,
-                "xmax": 1.1 * XMAX,
-                "ymin": -0.1 * YMAX,
-                "ymax": 1.1 * YMAX,
+                "xmin": 0,
+                "xmax": XMAX,
+                "ymin": 0,
+                "ymax": YMAX,
             }
         )
 
@@ -53,44 +53,45 @@ class BoundaryConditions:
 
 
 class InitialCondition:
-    def initial_condition(self) -> None:
-        # Set initial condition for pressure, default values for other variables.
-        super().initial_condition()
+    pass
+    # def initial_condition(self) -> None:
+    #     # Set initial condition for pressure, default values for other variables.
+    #     super().initial_condition()
 
-    def ic_values_temperature(self, sd: pp.Grid) -> np.ndarray:
-        """Method returning the initial temperature values for a given grid.
+    # def ic_values_temperature(self, sd: pp.Grid) -> np.ndarray:
+    #     """Method returning the initial temperature values for a given grid.
 
-        Override this method to provide different initial conditions.
+    #     Override this method to provide different initial conditions.
 
-        Parameters:
-            sd: A subdomain in the md-grid.
+    #     Parameters:
+    #         sd: A subdomain in the md-grid.
 
-        Returns:
-            The initial temperature values on that subdomain with
-            ``shape=(sd.num_cells,)``. Defaults to zero array.
+    #     Returns:
+    #         The initial temperature values on that subdomain with
+    #         ``shape=(sd.num_cells,)``. Defaults to zero array.
 
-        """
-        return np.ones(sd.num_cells) * self.reference_variable_values.temperature
+    #     """
+    #     return np.ones(sd.num_cells) * self.reference_variable_values.temperature
 
-    def ic_values_pressure(self, sd: pp.Grid) -> np.ndarray:
-        """Method returning the initial pressure values for a given grid.
+    # def ic_values_pressure(self, sd: pp.Grid) -> np.ndarray:
+    #     """Method returning the initial pressure values for a given grid.
 
-        Override this method to provide different initial conditions.
+    #     Override this method to provide different initial conditions.
 
-        Parameters:
-            sd: A subdomain in the md-grid.
+    #     Parameters:
+    #         sd: A subdomain in the md-grid.
 
-        Returns:
-            The initial pressure values on that subdomain with
-            ``shape=(sd.num_cells,)``. Defaults to zero array.
+    #     Returns:
+    #         The initial pressure values on that subdomain with
+    #         ``shape=(sd.num_cells,)``. Defaults to zero array.
 
-        """
-        return np.ones(sd.num_cells) * self.reference_variable_values.pressure
+    #     """
+    #     return np.ones(sd.num_cells) * self.reference_variable_values.pressure
 
 
 class Source:
     def locate_source(self, subdomains):
-        source_loc_x = XMAX * 0.9
+        source_loc_x = XMAX * 0.5
         source_loc_y = YMAX * 0.5
 
         ambient = [sd for sd in subdomains if sd.dim == self.nd]
@@ -124,8 +125,12 @@ class Source:
         src = self.locate_source(subdomains)
         src *= self.fluid_source_mass_rate()
         cv = self.fluid.components[0].specific_heat_capacity
+        t_inj = 40
+        if self.params["setup"].get("isothermal", False):
+            t_inj = self.reference_variable_values.temperature - 273
+
         t_inj = (
-            self.units.convert_units(273 + 40, "K")
+            self.units.convert_units(273 + t_inj, "K")
             - self.reference_variable_values.temperature
         )
         src *= cv * t_inj
@@ -212,7 +217,7 @@ class THMModel(
     Source,
     InitialCondition,
     BoundaryConditions,
-    # THMSolver,
+    FTHM_Solver.IterativeSolverMixin,
     SolverStatistics,
     SolutionStrategyLocalTHM,
     pp.models.solution_strategy.ContactIndicators,
@@ -293,6 +298,7 @@ def make_model(setup: dict):
         },
         # experimental
         "adaptive_indicator_scaling": True,  # Scale the indicator adaptively to increase robustness
+        "linear_solver": {"preconditioner_factory": FTHM_Solver.thm_factory},
     }
     return THMModel(params)
 
@@ -310,9 +316,9 @@ def run_model(setup: dict):
             "prepare_simulation": False,
             "progressbars": False,
             "nl_convergence_tol": float("inf"),
-            "nl_convergence_tol_res": 1e-8,
+            "nl_convergence_tol_res": 1e-7,
             "nl_divergence_tol": 1e8,
-            "max_iterations": 30,
+            "max_iterations": 10,
             # experimental
             "nonlinear_solver": ConstraintLineSearchNonlinearSolver,
             "Global_line_search": 0,  # Set to 1 to use turn on a residual-based line search
