@@ -14,6 +14,14 @@ from typing import Optional
 from stats import SolverStatistics
 import FTHM_Solver
 
+from porepy.models.constitutive_laws import (
+    ConstantPermeability,
+    CubicLawPermeability,
+    DimensionDependentPermeability,
+    SpecificStorage,
+)
+
+
 from porepy.applications.md_grids.fracture_sets import benchmark_2d_case_3
 
 
@@ -33,8 +41,26 @@ class Geometry:
         )
 
     def set_fractures(self) -> None:
-        # self._fractures = []
-        self._fractures = benchmark_2d_case_3(size=XMAX)
+        # self._fractures = benchmark_2d_case_3(size=XMAX)
+        points = np.array(
+            [
+                [[0.0500, 0.2200], [0.4160, 0.0624]],
+                [[0.0500, 0.2500], [0.2750, 0.1350]],
+                [[0.1500, 0.4500], [0.6300, 0.0900]],
+                [[0.1500, 0.4000], [0.9167, 0.5000]],
+                [[0.6500, 0.849723], [0.8333, 0.167625]],
+                [[0.7000, 0.849723], [0.2350, 0.167625]],
+                [[0.6000, 0.8500], [0.3800, 0.2675]],
+                [[0.3500, 0.8000], [0.9714, 0.7143]],
+                [[0.7500, 0.9500], [0.9574, 0.8155]],
+                [[0.1500, 0.4000], [0.8363, 0.9727]],
+            ]
+        )
+        xscale = XMAX / 2
+        yscale = YMAX / 2
+        points[:, 0] = xscale / 2 + points[:, 0] * xscale
+        points[:, 1] = yscale / 2 + points[:, 1] * yscale
+        self._fractures = [pp.LineFracture(pts) for pts in points]
 
 
 class BoundaryConditions:
@@ -51,59 +77,72 @@ class BoundaryConditions:
 
         return bc_values.ravel("F")
 
+    def bc_type_fluid_flux(self, sd: pp.Grid) -> pp.BoundaryCondition:
+        sides = self.domain_boundary_sides(sd)
+        bc = pp.BoundaryCondition(sd, sides.all_bf, "dir")
+        return bc
+
+    def bc_type_mechanics(self, sd: pp.Grid) -> pp.BoundaryConditionVectorial:
+        sides = self.domain_boundary_sides(sd)
+        bc = pp.BoundaryConditionVectorial(sd, sides.south, "dir")
+        bc.internal_to_dirichlet(sd)
+        return bc
+
 
 class InitialCondition:
-    pass
-    # def initial_condition(self) -> None:
-    #     # Set initial condition for pressure, default values for other variables.
-    #     super().initial_condition()
+    def initial_condition(self) -> None:
+        super().initial_condition()
+        if self.params["setup"]["steady_state"]:
+            num_cells = sum([sd.num_cells for sd in self.mdg.subdomains()])
+            val = self.reference_variable_values.pressure * np.ones(num_cells)
+            for time_step_index in self.time_step_indices:
+                self.equation_system.set_variable_values(
+                    val,
+                    variables=[self.pressure_variable],
+                    time_step_index=time_step_index,
+                )
 
-    # def ic_values_temperature(self, sd: pp.Grid) -> np.ndarray:
-    #     """Method returning the initial temperature values for a given grid.
+            for iterate_index in self.iterate_indices:
+                self.equation_system.set_variable_values(
+                    val,
+                    variables=[self.pressure_variable],
+                    iterate_index=iterate_index,
+                )
 
-    #     Override this method to provide different initial conditions.
+            val = self.reference_variable_values.temperature * np.ones(num_cells)
+            for time_step_index in self.time_step_indices:
+                self.equation_system.set_variable_values(
+                    val,
+                    variables=[self.temperature_variable],
+                    time_step_index=time_step_index,
+                )
 
-    #     Parameters:
-    #         sd: A subdomain in the md-grid.
-
-    #     Returns:
-    #         The initial temperature values on that subdomain with
-    #         ``shape=(sd.num_cells,)``. Defaults to zero array.
-
-    #     """
-    #     return np.ones(sd.num_cells) * self.reference_variable_values.temperature
-
-    # def ic_values_pressure(self, sd: pp.Grid) -> np.ndarray:
-    #     """Method returning the initial pressure values for a given grid.
-
-    #     Override this method to provide different initial conditions.
-
-    #     Parameters:
-    #         sd: A subdomain in the md-grid.
-
-    #     Returns:
-    #         The initial pressure values on that subdomain with
-    #         ``shape=(sd.num_cells,)``. Defaults to zero array.
-
-    #     """
-    #     return np.ones(sd.num_cells) * self.reference_variable_values.pressure
+            for iterate_index in self.iterate_indices:
+                self.equation_system.set_variable_values(
+                    val,
+                    variables=[self.temperature_variable],
+                    iterate_index=iterate_index,
+                )
+        else:
+            initial_state = self.params["setup"]["initial_state"]
+            if initial_state != "ignore":
+                vals = np.load(initial_state)
+                self.equation_system.set_variable_values(vals, time_step_index=0)
+                self.equation_system.set_variable_values(vals, iterate_index=0)
 
 
 class Source:
     def locate_source(self, subdomains):
         source_loc_x = XMAX * 0.5
         source_loc_y = YMAX * 0.5
-
         ambient = [sd for sd in subdomains if sd.dim == self.nd]
         fractures = [sd for sd in subdomains if sd.dim == self.nd - 1]
         lower = [sd for sd in subdomains if sd.dim <= self.nd - 2]
-        if len(self._fractures) > 0:
-            x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
-            source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
-            src_frac = np.zeros(x.size)
-            src_frac[source_loc] = 1
-        else:
-            src_frac = np.array([])
+
+        x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
+        source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
+        src_frac = np.zeros(x.size)
+        src_frac[source_loc] = 1
 
         zeros_ambient = np.zeros(sum(sd.num_cells for sd in ambient))
         zeros_lower = np.zeros(sum(sd.num_cells for sd in lower))
@@ -181,7 +220,7 @@ class SolutionStrategyLocalTHM:
         """
         if residual is None:
             return np.nan
-        residual_norm = np.linalg.norm(residual) / np.linalg.norm(reference_residual)
+        residual_norm = np.linalg.norm(residual)  # / np.linalg.norm(reference_residual)
         return residual_norm
 
     def compute_nonlinear_increment_norm(
@@ -217,6 +256,7 @@ class THMModel(
     Source,
     InitialCondition,
     BoundaryConditions,
+    CubicLawPermeability,
     FTHM_Solver.IterativeSolverMixin,
     SolverStatistics,
     SolutionStrategyLocalTHM,
@@ -235,15 +275,18 @@ def make_model(setup: dict):
     lame = 1.2e10
     if setup["steady_state"]:
         biot = 0
-        dt_init = 1e-1
+        dt_init = 1e0
         end_time = 1e1
     else:
         biot = 0.47
         dt_init = 1e-3
         if setup["grid_refinement"] >= 33:
-            dt_init = 1e-4
-        end_time = 5e2
+            dt_init = 1e-4  # Is this necessary?
+        end_time = setup.get("end_time", 5e2)
     porosity = 1.3e-2  # probably on the low side
+
+    thermal_conductivity_multiplier = setup.get("thermal_conductivity_multiplier", 1)
+    friction_coef = setup.get("friction_coef", 0.577)
 
     params = {
         "setup": setup,
@@ -256,16 +299,17 @@ def make_model(setup: dict):
                 # LESS IMPORTANT
                 shear_modulus=shear,  # [Pa]
                 lame_lambda=lame,  # [Pa]
-                dilation_angle=0 * np.pi / 180,  # [rad]
+                dilation_angle=5 * np.pi / 180,  # [rad]
                 normal_permeability=1e-4,
                 # granite
                 biot_coefficient=biot,  # [-]
                 density=2683.0,  # [kg * m^-3]
                 porosity=porosity,  # [-]
-                friction_coefficient=0.577,  # [-]
+                friction_coefficient=friction_coef,  # [-]
                 # Thermal
                 specific_heat_capacity=720.7,
-                thermal_conductivity=0.1,  # Diffusion coefficient
+                thermal_conductivity=0.1
+                * thermal_conductivity_multiplier,  # Diffusion coefficient
                 thermal_expansion=9.66e-6,
             ),
             "fluid": pp.FluidComponent(
@@ -289,7 +333,7 @@ def make_model(setup: dict):
         "time_manager": pp.TimeManager(
             dt_init=dt_init * DAY,
             schedule=[0, end_time * DAY],
-            iter_max=30,
+            # iter_max=30,
             constant_dt=False,
         ),
         "units": pp.Units(kg=1e10),
@@ -297,8 +341,9 @@ def make_model(setup: dict):
             "cell_size": (0.1 * XMAX / cell_size_multiplier),
         },
         # experimental
-        "adaptive_indicator_scaling": True,  # Scale the indicator adaptively to increase robustness
+        "adaptive_indicator_scaling": 1,  # Scale the indicator adaptively to increase robustness
         "linear_solver": {"preconditioner_factory": FTHM_Solver.thm_factory},
+        # "linear_solver": "pypardiso",
     }
     return THMModel(params)
 
@@ -321,13 +366,14 @@ def run_model(setup: dict):
             "max_iterations": 10,
             # experimental
             "nonlinear_solver": ConstraintLineSearchNonlinearSolver,
-            "Global_line_search": 0,  # Set to 1 to use turn on a residual-based line search
-            "Local_line_search": 1,  # Set to 0 to use turn off the tailored line search
+            "Global_line_search": 1,  # Set to 1 to use turn on a residual-based line search
+            "Local_line_search": 0,  # Set to 0 to use turn off the tailored line search
         },
     )
 
     # write_dofs_info(model)
     # print(model.simulation_name())
+    return model
 
 
 if __name__ == "__main__":
@@ -335,7 +381,7 @@ if __name__ == "__main__":
         "solver": "CPR",
     }
     for g in [
-        3,
+        1,
         # 2,
         # 5,
         # 25,
