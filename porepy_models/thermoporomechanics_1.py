@@ -139,14 +139,19 @@ class Source:
         fractures = [sd for sd in subdomains if sd.dim == self.nd - 1]
         lower = [sd for sd in subdomains if sd.dim <= self.nd - 2]
 
-        x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
-        source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
-        src_frac = np.zeros(x.size)
-        src_frac[source_loc] = 1
+        src_ambient = np.zeros(sum(sd.num_cells for sd in ambient))
+        src_frac = np.zeros(sum(sd.num_cells for sd in fractures))
+        if len(fractures) > 0:
+            x, y, z = np.concatenate([sd.cell_centers for sd in fractures], axis=1)
+            source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
+            src_frac[source_loc] = 1
+        else:
+            x, y, z = np.concatenate([sd.cell_centers for sd in ambient], axis=1)
+            source_loc = np.argmin((x - source_loc_x) ** 2 + (y - source_loc_y) ** 2)
+            src_ambient[source_loc] = 1
 
-        zeros_ambient = np.zeros(sum(sd.num_cells for sd in ambient))
         zeros_lower = np.zeros(sum(sd.num_cells for sd in lower))
-        return np.concatenate([zeros_ambient, src_frac, zeros_lower])
+        return np.concatenate([src_ambient, src_frac, zeros_lower])
 
     def fluid_source_mass_rate(self):
         if self.params["setup"]["steady_state"]:
