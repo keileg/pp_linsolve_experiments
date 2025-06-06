@@ -347,7 +347,10 @@ def make_model(setup: dict):
         },
         # experimental
         "adaptive_indicator_scaling": 1,  # Scale the indicator adaptively to increase robustness
-        "linear_solver": {"preconditioner_factory": FTHM_Solver.thm_factory},
+        "linear_solver": {
+            "preconditioner_factory": FTHM_Solver.thm_factory,
+            "options": {"ksp_monitor": None},
+        },
         # "linear_solver": "pypardiso",
     }
     return THMModel(params)
